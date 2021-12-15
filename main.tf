@@ -1,7 +1,7 @@
 resource "aws_s3_bucket" "automa" {
   bucket = "automa-automa"
   versioning {
-    enabled = true
+    enabled = false
   }
   # lifecycle {
   #   prevent_destroy = true
@@ -58,8 +58,22 @@ resource "aws_ecs_task_definition" "my_task" {
           "hostPort": 8000
         }
       ],
+      "environmentFiles": [
+        {
+          "value":  "arn:aws:s3:::${var.project}-backend-env/${terraform.workspace}.env",
+          "type": "s3"
+        }
+      ],
       "memory": 512,
-      "cpu": 256
+      "cpu": 256,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "awslogs-${var.project}.${terraform.workspace}",
+          "awslogs-region": "${var.aws_region}",
+          "awslogs-stream-prefix": "awslogs-example"
+        }
+      }
     }
   ]
   DEFINITION
@@ -86,9 +100,45 @@ data "aws_iam_policy_document" "assume_role_policy" {
   }
 }
 
+resource "aws_iam_policy" "s3_env_vars" {
+  name        = "test-policy"
+  description = "A test policy"
+
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::automa-backend-env/staging.env"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation"
+      ],
+      "Resource": [
+        "arn:aws:s3:::automa-backend-env"
+      ]
+    }
+  ]
+}
+EOF
+}
+
 resource "aws_iam_role_policy_attachment" "ecsTaskExecutionRole_policy" {
   role       = aws_iam_role.ecsTaskExecutionRole.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "s3_env_vars_policy" {
+  role       = aws_iam_role.ecsTaskExecutionRole.name
+  policy_arn = aws_iam_policy.s3_env_vars.arn
 }
 
 resource "aws_ecs_service" "my_service" {
@@ -111,6 +161,7 @@ resource "aws_ecs_service" "my_service" {
       "${aws_default_subnet.default_subnet_c.id}"
     ]
     assign_public_ip = true
+    security_groups  = ["${aws_security_group.service_security_group.id}"] # Setting the security group
   }
 }
 
