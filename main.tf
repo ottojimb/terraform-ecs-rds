@@ -114,7 +114,7 @@ resource "aws_iam_policy" "s3_env_vars" {
         "s3:GetObject"
       ],
       "Resource": [
-        "arn:aws:s3:::automa-backend-env/staging.env"
+        "arn:aws:s3:::${var.project}-backend-env/staging.env"
       ]
     },
     {
@@ -123,7 +123,7 @@ resource "aws_iam_policy" "s3_env_vars" {
         "s3:GetBucketLocation"
       ],
       "Resource": [
-        "arn:aws:s3:::automa-backend-env"
+        "arn:aws:s3:::${var.project}-backend-env"
       ]
     }
   ]
@@ -141,8 +141,8 @@ resource "aws_iam_role_policy_attachment" "s3_env_vars_policy" {
   policy_arn = aws_iam_policy.s3_env_vars.arn
 }
 
-resource "aws_ecs_service" "my_service" {
-  name            = "my-service"
+resource "aws_ecs_service" "backend_service" {
+  name            = "backend"
   cluster         = aws_ecs_cluster.my_cluster.id
   task_definition = aws_ecs_task_definition.my_task.arn
   launch_type     = "FARGATE"
@@ -166,6 +166,7 @@ resource "aws_ecs_service" "my_service" {
 }
 
 resource "aws_default_vpc" "default_vpc" {
+  name = "${var.project}-${terraform.workspace}"
 }
 
 resource "aws_default_subnet" "default_subnet_a" {
@@ -181,7 +182,7 @@ resource "aws_default_subnet" "default_subnet_c" {
 }
 
 resource "aws_alb" "application_load_balancer" {
-  name               = "test-lb-tf"
+  name               = "${var.project}-${terraform.workspace}"
   load_balancer_type = "application"
   subnets = [ # Referencing the default subnets
     "${aws_default_subnet.default_subnet_a.id}",
@@ -226,7 +227,7 @@ resource "aws_lb_listener" "listener" {
   protocol          = "HTTP"
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.target_group.arn # Referencing our tagrte group
+    target_group_arn = aws_lb_target_group.target_group.arn # Referencing our target group
   }
 }
 

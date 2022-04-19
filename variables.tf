@@ -3,5 +3,5 @@ variable "aws_region" {
 }
 
 variable "project" {
-  default = "automa"
+  default = "nauty"
 }
