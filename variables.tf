@@ -5,3 +5,7 @@ variable "aws_region" {
 variable "project" {
   default = "nauty"
 }
+
+variable "password_db" {
+  default = "password"
+}
