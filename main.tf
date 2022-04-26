@@ -1,28 +1,48 @@
-resource "aws_s3_bucket" "automa" {
-  bucket = "automa-automa"
-  versioning {
-    enabled = false
+resource "aws_s3_bucket" "tfbucket" {
+  bucket = "${var.project}-tfstate"
+
+  lifecycle {
+    # prevent_destroy = true
   }
-  # lifecycle {
-  #   prevent_destroy = true
-  # }
+
   tags = {
-    Name = "terraform remote state"
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "tfbucket" {
+  bucket = aws_s3_bucket.tfbucket.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket" "env_vars" {
+  bucket = "${var.project}-backend-env"
+
+  lifecycle {
+    # prevent_destroy = true
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
   }
 }
 
 terraform {
   # backend "s3" {
-  #   bucket = "automa-automa"
-  #   key    = "terraform/automa/key"
-  #   region = "us-east-1"
+  #   bucket = "${var.project}-tfstate"
+  #   key    = "terraform/${terraform.workspace}_key"
+  #   region = var.aws_region
   #   encrypt = true
   # }
 
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 3.0"
+      version = "~> 4.0"
     }
   }
 }
@@ -31,31 +51,50 @@ provider "aws" {
   region = var.aws_region
 }
 
-resource "aws_ecr_repository" "automa" {
+resource "aws_ecr_repository" "custom_ecr_repository" {
   name                 = "${var.project}-${terraform.workspace}"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
     scan_on_push = false
   }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
 }
 
-resource "aws_ecs_cluster" "my_cluster" {
-  name = terraform.workspace
+resource "aws_ecs_cluster" "custom_cluster" {
+  name = "${terraform.workspace}-v2"
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
 }
 
-resource "aws_ecs_task_definition" "my_task" {
+resource "aws_cloudwatch_log_group" "log" {
+  name = "awslogs-${var.project}-${terraform.workspace}"
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
+}
+
+resource "aws_ecs_task_definition" "custom_ecs_task" {
   family                   = "${var.project}-${terraform.workspace}"
   container_definitions    = <<DEFINITION
   [
     {
       "name": "${var.project}-${terraform.workspace}",
-      "image": "${aws_ecr_repository.automa.repository_url}",
+      "image": "${aws_ecr_repository.custom_ecr_repository.repository_url}",
       "essential": true,
       "portMappings": [
         {
-          "containerPort": 8000,
-          "hostPort": 8000
+          "containerPort": 80,
+          "hostPort": 80
         }
       ],
       "environmentFiles": [
@@ -69,24 +108,34 @@ resource "aws_ecs_task_definition" "my_task" {
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "awslogs-${var.project}.${terraform.workspace}",
+          "awslogs-group": "${aws_cloudwatch_log_group.log.name}",
           "awslogs-region": "${var.aws_region}",
-          "awslogs-stream-prefix": "awslogs-example"
+          "awslogs-stream-prefix": "awslogs-${var.project}-${terraform.workspace}"
         }
       }
     }
   ]
   DEFINITION
-  requires_compatibilities = ["FARGATE"] # Stating that we are using ECS Fargate
-  network_mode             = "awsvpc"    # Using awsvpc as our network mode as this is required for Fargate
-  memory                   = 512         # Specifying the memory our container requires
-  cpu                      = 256         # Specifying the CPU our container requires
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  memory                   = 512
+  cpu                      = 256
   execution_role_arn       = aws_iam_role.ecsTaskExecutionRole.arn
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
 }
 
 resource "aws_iam_role" "ecsTaskExecutionRole" {
   name               = "ecsTaskExecutionRole"
   assume_role_policy = data.aws_iam_policy_document.assume_role_policy.json
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
 }
 
 data "aws_iam_policy_document" "assume_role_policy" {
@@ -101,8 +150,8 @@ data "aws_iam_policy_document" "assume_role_policy" {
 }
 
 resource "aws_iam_policy" "s3_env_vars" {
-  name        = "test-policy"
-  description = "A test policy"
+  name        = "custom-policy"
+  description = "A custom policy"
 
   policy = <<EOF
 {
@@ -114,7 +163,7 @@ resource "aws_iam_policy" "s3_env_vars" {
         "s3:GetObject"
       ],
       "Resource": [
-        "arn:aws:s3:::automa-backend-env/staging.env"
+        "arn:aws:s3:::${var.project}-backend-env/${terraform.workspace}.env"
       ]
     },
     {
@@ -123,7 +172,7 @@ resource "aws_iam_policy" "s3_env_vars" {
         "s3:GetBucketLocation"
       ],
       "Resource": [
-        "arn:aws:s3:::automa-backend-env"
+        "arn:aws:s3:::${var.project}-backend-env"
       ]
     }
   ]
@@ -141,61 +190,56 @@ resource "aws_iam_role_policy_attachment" "s3_env_vars_policy" {
   policy_arn = aws_iam_policy.s3_env_vars.arn
 }
 
-resource "aws_ecs_service" "my_service" {
-  name            = "my-service"
-  cluster         = aws_ecs_cluster.my_cluster.id
-  task_definition = aws_ecs_task_definition.my_task.arn
+resource "aws_ecs_service" "backend_service" {
+  name            = "backend"
+  cluster         = aws_ecs_cluster.custom_cluster.id
+  task_definition = aws_ecs_task_definition.custom_ecs_task.arn
   launch_type     = "FARGATE"
   desired_count   = 1
 
   load_balancer {
     target_group_arn = aws_lb_target_group.target_group.arn
-    container_name   = aws_ecs_task_definition.my_task.family
-    container_port   = 8000
+    container_name   = aws_ecs_task_definition.custom_ecs_task.family
+    container_port   = 80
   }
 
   network_configuration {
-    subnets = [
-      "${aws_default_subnet.default_subnet_a.id}",
-      "${aws_default_subnet.default_subnet_b.id}",
-      "${aws_default_subnet.default_subnet_c.id}"
-    ]
-    assign_public_ip = true
-    security_groups  = ["${aws_security_group.service_security_group.id}"] # Setting the security group
+    subnets          = module.vpc.private_subnets
+    assign_public_ip = false
+    security_groups  = ["${aws_security_group.service_security_group.id}", "${aws_security_group.load_balancer_security_group.id}"] # Setting the security group
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
   }
 }
 
-resource "aws_default_vpc" "default_vpc" {
-}
-
-resource "aws_default_subnet" "default_subnet_a" {
-  availability_zone = "us-east-1a"
-}
-
-resource "aws_default_subnet" "default_subnet_b" {
-  availability_zone = "us-east-1b"
-}
-
-resource "aws_default_subnet" "default_subnet_c" {
-  availability_zone = "us-east-1c"
-}
-
 resource "aws_alb" "application_load_balancer" {
-  name               = "test-lb-tf"
+  name               = "${var.project}-${terraform.workspace}"
   load_balancer_type = "application"
-  subnets = [ # Referencing the default subnets
-    "${aws_default_subnet.default_subnet_a.id}",
-    "${aws_default_subnet.default_subnet_b.id}",
-    "${aws_default_subnet.default_subnet_c.id}",
-  ]
-  security_groups = ["${aws_security_group.load_balancer_security_group.id}"]
+  subnets            = module.vpc.public_subnets
+  security_groups    = ["${aws_security_group.load_balancer_security_group.id}"]
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
 }
 
 # Creating a security group for the load balancer:
 resource "aws_security_group" "load_balancer_security_group" {
+  vpc_id = module.vpc.vpc_id
   ingress {
     from_port   = 80 # Allowing traffic in from port 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allowing traffic in from all sources
+  }
+
+  ingress {
+    from_port   = 443 # Allowing traffic in from port 80
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"] # Allowing traffic in from all sources
   }
@@ -206,31 +250,73 @@ resource "aws_security_group" "load_balancer_security_group" {
     protocol    = "-1"          # Allowing any outgoing protocol 
     cidr_blocks = ["0.0.0.0/0"] # Allowing traffic out to all IP addresses
   }
-}
 
-resource "aws_lb_target_group" "target_group" {
-  name        = "target-group"
-  port        = 80
-  protocol    = "HTTP"
-  target_type = "ip"
-  vpc_id      = aws_default_vpc.default_vpc.id # Referencing the default VPC
-  health_check {
-    matcher = "200,301,302"
-    path    = "/"
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
   }
 }
 
-resource "aws_lb_listener" "listener" {
-  load_balancer_arn = aws_alb.application_load_balancer.arn # Referencing our load balancer
+resource "aws_lb_target_group" "target_group" {
+  name        = "${var.project}-${terraform.workspace}"
+  port        = 80
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = module.vpc.vpc_id
+  health_check {
+    matcher  = "200,301,302"
+    path     = "/"
+    interval = "300"
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_alb.application_load_balancer.arn
+  port              = "443"
+  protocol          = "HTTPS"
+
+  ssl_policy      = "ELBSecurityPolicy-2016-08"
+  certificate_arn = var.ecs_acm_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.target_group.arn
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_alb.application_load_balancer.arn
   port              = "80"
   protocol          = "HTTP"
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.target_group.arn # Referencing our tagrte group
+    type = "redirect"
+
+    redirect {
+      port        = 443
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
   }
 }
 
 resource "aws_security_group" "service_security_group" {
+  vpc_id = module.vpc.vpc_id # Referencing the default VPC
+
   ingress {
     from_port = 0
     to_port   = 0
@@ -244,5 +330,10 @@ resource "aws_security_group" "service_security_group" {
     to_port     = 0             # Allowing any outgoing port
     protocol    = "-1"          # Allowing any outgoing protocol 
     cidr_blocks = ["0.0.0.0/0"] # Allowing traffic out to all IP addresses
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
   }
 }

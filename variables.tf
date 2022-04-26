@@ -3,5 +3,13 @@ variable "aws_region" {
 }
 
 variable "project" {
-  default = "automa"
+  default = "nauty2"
+}
+
+variable "password_db" {
+  default = "password"
+}
+
+variable "ecs_acm_arn" {
+  default = "ecs_acm_arn"
 }
