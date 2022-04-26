@@ -13,7 +13,7 @@ module "vpc" {
   create_database_subnet_route_table = true
 
   enable_nat_gateway = true
-  enable_vpn_gateway = true
+  # enable_vpn_gateway = true
 
   tags = {
     "project"   = "${var.project}"

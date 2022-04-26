@@ -14,3 +14,7 @@ output "db_instance_password" {
   value       = module.db.db_instance_password
   sensitive   = true
 }
+
+output "elb_dns" {
+  value = aws_alb.application_load_balancer.dns_name
+}

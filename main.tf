@@ -18,6 +18,19 @@ resource "aws_s3_bucket_versioning" "tfbucket" {
   }
 }
 
+resource "aws_s3_bucket" "env_vars" {
+  bucket = "${var.project}-backend-env"
+
+  lifecycle {
+    # prevent_destroy = true
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
+}
+
 terraform {
   # backend "s3" {
   #   bucket = "${var.project}-tfstate"
@@ -61,6 +74,15 @@ resource "aws_ecs_cluster" "custom_cluster" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "log" {
+  name = "awslogs-${var.project}-${terraform.workspace}"
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
+}
+
 resource "aws_ecs_task_definition" "custom_ecs_task" {
   family                   = "${var.project}-${terraform.workspace}"
   container_definitions    = <<DEFINITION
@@ -71,8 +93,8 @@ resource "aws_ecs_task_definition" "custom_ecs_task" {
       "essential": true,
       "portMappings": [
         {
-          "containerPort": 8000,
-          "hostPort": 8000
+          "containerPort": 80,
+          "hostPort": 80
         }
       ],
       "environmentFiles": [
@@ -86,9 +108,9 @@ resource "aws_ecs_task_definition" "custom_ecs_task" {
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "awslogs-${var.project}.${terraform.workspace}",
+          "awslogs-group": "${aws_cloudwatch_log_group.log.name}",
           "awslogs-region": "${var.aws_region}",
-          "awslogs-stream-prefix": "awslogs-example"
+          "awslogs-stream-prefix": "awslogs-${var.project}-${terraform.workspace}"
         }
       }
     }
@@ -178,13 +200,13 @@ resource "aws_ecs_service" "backend_service" {
   load_balancer {
     target_group_arn = aws_lb_target_group.target_group.arn
     container_name   = aws_ecs_task_definition.custom_ecs_task.family
-    container_port   = 8000
+    container_port   = 80
   }
 
   network_configuration {
     subnets          = module.vpc.private_subnets
-    assign_public_ip = true
-    security_groups  = ["${aws_security_group.service_security_group.id}"] # Setting the security group
+    assign_public_ip = false
+    security_groups  = ["${aws_security_group.service_security_group.id}", "${aws_security_group.load_balancer_security_group.id}"] # Setting the security group
   }
 
   tags = {
@@ -196,7 +218,7 @@ resource "aws_ecs_service" "backend_service" {
 resource "aws_alb" "application_load_balancer" {
   name               = "${var.project}-${terraform.workspace}"
   load_balancer_type = "application"
-  subnets            = module.vpc.private_subnets
+  subnets            = module.vpc.public_subnets
   security_groups    = ["${aws_security_group.load_balancer_security_group.id}"]
 
   tags = {
@@ -215,6 +237,13 @@ resource "aws_security_group" "load_balancer_security_group" {
     cidr_blocks = ["0.0.0.0/0"] # Allowing traffic in from all sources
   }
 
+  ingress {
+    from_port   = 443 # Allowing traffic in from port 80
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allowing traffic in from all sources
+  }
+
   egress {
     from_port   = 0             # Allowing any incoming port
     to_port     = 0             # Allowing any outgoing port
@@ -229,14 +258,15 @@ resource "aws_security_group" "load_balancer_security_group" {
 }
 
 resource "aws_lb_target_group" "target_group" {
-  name        = "target-group"
+  name        = "${var.project}-${terraform.workspace}"
   port        = 80
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = module.vpc.vpc_id # Referencing the default VPC
+  vpc_id      = module.vpc.vpc_id
   health_check {
-    matcher = "200,301,302"
-    path    = "/"
+    matcher  = "200,301,302"
+    path     = "/"
+    interval = "300"
   }
 
   tags = {
@@ -245,13 +275,37 @@ resource "aws_lb_target_group" "target_group" {
   }
 }
 
-resource "aws_lb_listener" "listener" {
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_alb.application_load_balancer.arn
+  port              = "443"
+  protocol          = "HTTPS"
+
+  ssl_policy      = "ELBSecurityPolicy-2016-08"
+  certificate_arn = var.ecs_acm_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.target_group.arn
+  }
+
+  tags = {
+    "project"   = "${var.project}"
+    "workspace" = "${terraform.workspace}"
+  }
+}
+
+resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_alb.application_load_balancer.arn
   port              = "80"
   protocol          = "HTTP"
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.target_group.arn
+    type = "redirect"
+
+    redirect {
+      port        = 443
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
   }
 
   tags = {

@@ -2,7 +2,7 @@ module "security_group" {
   source = "terraform-aws-modules/security-group/aws"
 
   name        = "${var.project}-${terraform.workspace}-db-sg"
-  description = "Complete PostgreSQL example security group"
+  description = "Complete PostgreSQL security group"
   vpc_id      = module.vpc.vpc_id
 
   # ingress
@@ -46,7 +46,7 @@ module "db" {
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
   create_cloudwatch_log_group     = true
 
-  backup_retention_period = 0
+  backup_retention_period = 7
   skip_final_snapshot     = true
   deletion_protection     = false
 
