@@ -13,6 +13,7 @@ Any expert help would be much appreciated!
 	TF_VAR_project="project_name"
 	TF_VAR_password_db="password"
 	TF_VAR_ecs_acm_arn="arn:aws:acm:ZONE:NUMBER:certificate/UUID"
+	TF_VAR_image_port="3000"
 	```
 
 - Import the vars:

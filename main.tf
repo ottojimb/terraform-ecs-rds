@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "tfbucket" {
-  bucket = "${var.project}-tfstate"
+  bucket = "${var.project}-${var.subproject}-tfstate"
 
   lifecycle {
     # prevent_destroy = true
@@ -7,6 +7,7 @@ resource "aws_s3_bucket" "tfbucket" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
@@ -19,7 +20,7 @@ resource "aws_s3_bucket_versioning" "tfbucket" {
 }
 
 resource "aws_s3_bucket" "env_vars" {
-  bucket = "${var.project}-backend-env"
+  bucket = "${var.project}-${var.subproject}-env"
 
   lifecycle {
     # prevent_destroy = true
@@ -27,6 +28,7 @@ resource "aws_s3_bucket" "env_vars" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
@@ -52,7 +54,7 @@ provider "aws" {
 }
 
 resource "aws_ecr_repository" "custom_ecr_repository" {
-  name                 = "${var.project}-${terraform.workspace}"
+  name                 = "${var.project}-${var.subproject}-${terraform.workspace}"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
@@ -61,12 +63,13 @@ resource "aws_ecr_repository" "custom_ecr_repository" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
 
 resource "aws_ecs_cluster" "custom_cluster" {
-  name = "${terraform.workspace}-v2"
+  name = "${terraform.workspace}-v1"
 
   tags = {
     "project"   = "${var.project}"
@@ -75,31 +78,32 @@ resource "aws_ecs_cluster" "custom_cluster" {
 }
 
 resource "aws_cloudwatch_log_group" "log" {
-  name = "awslogs-${var.project}-${terraform.workspace}"
+  name = "awslogs-${var.project}-${var.subproject}-${terraform.workspace}"
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
 
 resource "aws_ecs_task_definition" "custom_ecs_task" {
-  family                   = "${var.project}-${terraform.workspace}"
+  family                   = "${var.project}-${var.subproject}-${terraform.workspace}"
   container_definitions    = <<DEFINITION
   [
     {
-      "name": "${var.project}-${terraform.workspace}",
+      "name": "${var.project}-${var.subproject}-${terraform.workspace}",
       "image": "${aws_ecr_repository.custom_ecr_repository.repository_url}",
       "essential": true,
       "portMappings": [
         {
-          "containerPort": 80,
-          "hostPort": 80
+          "containerPort": ${var.image_port},
+          "hostPort": ${var.image_port}
         }
       ],
       "environmentFiles": [
         {
-          "value":  "arn:aws:s3:::${var.project}-backend-env/${terraform.workspace}.env",
+          "value":  "arn:aws:s3:::${var.project}-${var.subproject}-env/${terraform.workspace}.env",
           "type": "s3"
         }
       ],
@@ -110,7 +114,7 @@ resource "aws_ecs_task_definition" "custom_ecs_task" {
         "options": {
           "awslogs-group": "${aws_cloudwatch_log_group.log.name}",
           "awslogs-region": "${var.aws_region}",
-          "awslogs-stream-prefix": "awslogs-${var.project}-${terraform.workspace}"
+          "awslogs-stream-prefix": "awslogs-${var.project}-${var.subproject}-${terraform.workspace}"
         }
       }
     }
@@ -124,6 +128,7 @@ resource "aws_ecs_task_definition" "custom_ecs_task" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
@@ -163,7 +168,7 @@ resource "aws_iam_policy" "s3_env_vars" {
         "s3:GetObject"
       ],
       "Resource": [
-        "arn:aws:s3:::${var.project}-backend-env/${terraform.workspace}.env"
+        "arn:aws:s3:::${var.project}-${var.subproject}-env/${terraform.workspace}.env"
       ]
     },
     {
@@ -172,7 +177,7 @@ resource "aws_iam_policy" "s3_env_vars" {
         "s3:GetBucketLocation"
       ],
       "Resource": [
-        "arn:aws:s3:::${var.project}-backend-env"
+        "arn:aws:s3:::${var.project}-${var.subproject}-env"
       ]
     }
   ]
@@ -191,7 +196,7 @@ resource "aws_iam_role_policy_attachment" "s3_env_vars_policy" {
 }
 
 resource "aws_ecs_service" "backend_service" {
-  name            = "backend"
+  name            = "${var.project}-${var.subproject}-${terraform.workspace}"
   cluster         = aws_ecs_cluster.custom_cluster.id
   task_definition = aws_ecs_task_definition.custom_ecs_task.arn
   launch_type     = "FARGATE"
@@ -200,7 +205,7 @@ resource "aws_ecs_service" "backend_service" {
   load_balancer {
     target_group_arn = aws_lb_target_group.target_group.arn
     container_name   = aws_ecs_task_definition.custom_ecs_task.family
-    container_port   = 80
+    container_port   = var.image_port
   }
 
   network_configuration {
@@ -211,18 +216,20 @@ resource "aws_ecs_service" "backend_service" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
 
 resource "aws_alb" "application_load_balancer" {
-  name               = "${var.project}-${terraform.workspace}"
+  name               = "${var.project}-${var.subproject}-${terraform.workspace}"
   load_balancer_type = "application"
   subnets            = module.vpc.public_subnets
   security_groups    = ["${aws_security_group.load_balancer_security_group.id}"]
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
@@ -253,12 +260,13 @@ resource "aws_security_group" "load_balancer_security_group" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
 
 resource "aws_lb_target_group" "target_group" {
-  name        = "${var.project}-${terraform.workspace}"
+  name        = "${var.project}-${var.subproject}-${terraform.workspace}"
   port        = 80
   protocol    = "HTTP"
   target_type = "ip"
@@ -269,8 +277,13 @@ resource "aws_lb_target_group" "target_group" {
     interval = "300"
   }
 
+  lifecycle {
+    create_before_destroy = true
+  }
+
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
@@ -290,6 +303,7 @@ resource "aws_lb_listener" "https" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
@@ -310,6 +324,7 @@ resource "aws_lb_listener" "http" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
@@ -334,6 +349,7 @@ resource "aws_security_group" "service_security_group" {
 
   tags = {
     "project"   = "${var.project}"
+    "subproject"   = "${var.subproject}"
     "workspace" = "${terraform.workspace}"
   }
 }
